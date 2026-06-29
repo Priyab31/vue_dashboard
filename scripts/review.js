@@ -16,8 +16,9 @@
 const fs = require('fs');
 
 // ── Constants ──────────────────────────────────────────────────────────────
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+// Trim to remove any accidental whitespace/newlines from the secret values
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
+const GITHUB_TOKEN = (process.env.GITHUB_TOKEN || '').trim();
 const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY;
 const GITHUB_EVENT_PATH = process.env.GITHUB_EVENT_PATH;
 
