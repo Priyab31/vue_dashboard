@@ -36,6 +36,7 @@
           <div class="booking-details">
             <div class="left-details">
               <span class="booking-name">{{ booking.name }}</span>
+              <span class="booking-guest">{{ booking.guest }}</span>
             </div>
             <div class="right-details">
               <span class="booking-date">{{ booking.date }}</span>
@@ -82,6 +83,13 @@ export default {
           name: 'Eva Williams',
           guest: 'DBL . 1 guest',
           date: '01.12-01.15',
+          paid: true,
+        },
+        {
+          profilePic: 'profile3.jpg',
+          name: 'Eva',
+          guest: 'DBL . 1 guest',
+          date: '03.12-01.15',
           paid: true,
         },
       ], // bookings array
