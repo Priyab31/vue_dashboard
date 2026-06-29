@@ -36,7 +36,6 @@
           <div class="booking-details">
             <div class="left-details">
               <span class="booking-name">{{ booking.name }}</span>
-              <span class="booking-guest">{{ booking.guest }}</span>
             </div>
             <div class="right-details">
               <span class="booking-date">{{ booking.date }}</span>

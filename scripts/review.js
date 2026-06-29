@@ -14,6 +14,7 @@
 'use strict';
 
 const fs = require('fs');
+const https = require('https');
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -33,43 +34,78 @@ function assertEnv(name, value) {
   }
 }
 
-async function githubRequest(path, options = {}) {
-  const url = `https://api.github.com${path}`;
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github.v3+json',
-      'Content-Type': 'application/json',
-      'User-Agent': 'ai-code-review-bot',
-      ...(options.headers || {}),
-    },
-  });
+/**
+ * Performs an HTTPS request using Node's built-in https module.
+ * More reliable than native fetch in GitHub Actions environments.
+ */
+function httpsRequest(url, options = {}, body = null) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const reqOptions = {
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method: options.method || 'GET',
+      headers: options.headers || {},
+    };
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`GitHub API error ${response.status} on ${path}: ${body}`);
+    const req = https.request(reqOptions, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: res.statusCode, body: raw });
+      });
+    });
+
+    req.on('error', reject);
+
+    if (body) {
+      req.write(body);
+    }
+    req.end();
+  });
+}
+
+async function githubRequest(path, method = 'GET', body = null, acceptHeader = 'application/vnd.github.v3+json') {
+  const url = `https://api.github.com${path}`;
+  const headers = {
+    Authorization: `Bearer ${GITHUB_TOKEN}`,
+    Accept: acceptHeader,
+    'User-Agent': 'ai-code-review-bot',
+  };
+
+  let bodyStr = null;
+  if (body) {
+    bodyStr = JSON.stringify(body);
+    headers['Content-Type'] = 'application/json';
+    headers['Content-Length'] = Buffer.byteLength(bodyStr);
   }
 
-  return response.json();
+  const { status, body: resBody } = await httpsRequest(url, { method, headers }, bodyStr);
+
+  if (status < 200 || status >= 300) {
+    throw new Error(`GitHub API error ${status} on ${path}: ${resBody}`);
+  }
+
+  return resBody ? JSON.parse(resBody) : null;
 }
 
 async function getPRDiff(owner, repo, prNumber) {
-  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`;
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github.v3.diff',
-      'User-Agent': 'ai-code-review-bot',
-    },
-  });
+  const path = `/repos/${owner}/${repo}/pulls/${prNumber}`;
+  const url = `https://api.github.com${path}`;
+  const headers = {
+    Authorization: `Bearer ${GITHUB_TOKEN}`,
+    Accept: 'application/vnd.github.v3.diff',
+    'User-Agent': 'ai-code-review-bot',
+  };
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Failed to fetch PR diff (${response.status}): ${body}`);
+  const { status, body } = await httpsRequest(url, { method: 'GET', headers });
+
+  if (status < 200 || status >= 300) {
+    throw new Error(`Failed to fetch PR diff (${status}): ${body}`);
   }
 
-  return response.text();
+  return body;
 }
 
 async function getAIReview(diff) {
@@ -107,39 +143,44 @@ One of: ✅ Approved | ⚠️ Needs Minor Changes | ❌ Needs Major Changes`;
 
   const userPrompt = `Please review the following pull request diff:\n\n\`\`\`diff\n${truncatedDiff}\n\`\`\``;
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: 0.2,
-      max_tokens: 1500,
-    }),
+  const requestBody = JSON.stringify({
+    model: OPENAI_MODEL,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    temperature: 0.2,
+    max_tokens: 1500,
   });
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`OpenAI API error (${response.status}): ${body}`);
+  const headers = {
+    Authorization: `Bearer ${OPENAI_API_KEY}`,
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(requestBody),
+  };
+
+  const { status, body } = await httpsRequest(
+    'https://api.openai.com/v1/chat/completions',
+    { method: 'POST', headers },
+    requestBody
+  );
+
+  if (status < 200 || status >= 300) {
+    throw new Error(`OpenAI API error (${status}): ${body}`);
   }
 
-  const data = await response.json();
+  const data = JSON.parse(body);
   return data.choices[0].message.content;
 }
 
 async function postComment(owner, repo, prNumber, body) {
   const comment = `## 🤖 AI Code Review\n\n${body}\n\n---\n*Reviewed by OpenAI ${OPENAI_MODEL} via GitHub Actions*`;
 
-  await githubRequest(`/repos/${owner}/${repo}/issues/${prNumber}/comments`, {
-    method: 'POST',
-    body: JSON.stringify({ body: comment }),
-  });
+  await githubRequest(
+    `/repos/${owner}/${repo}/issues/${prNumber}/comments`,
+    'POST',
+    { body: comment }
+  );
 
   console.log('AI review comment posted successfully.');
 }
